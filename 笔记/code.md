@@ -1,0 +1,115 @@
+# Python 列表方法速查（对照 JavaScript 数组）
+
+## 基础操作
+
+| 操作 | Python | JavaScript | 说明 |
+|------|--------|------------|------|
+| 创建空列表 | `lst = []` | `let lst = []` | |
+| 访问元素 | `lst[0]` | `lst[0]` | |
+| 长度 | `len(lst)` | `lst.length` | Python 用函数，JS 用属性 |
+| 最后一个元素 | `lst[-1]` | `lst[lst.length - 1]` | Python 支持负数索引 |
+
+## 增删改
+
+| 操作 | Python | JavaScript | 说明 |
+|------|--------|------------|------|
+| 末尾添加 | `lst.append(x)` | `lst.push(x)` | |
+| 指定位置插入 | `lst.insert(0, x)` | `lst.splice(0, 0, x)` | |
+| 删除末尾 | `lst.pop()` | `lst.pop()` | 一样 |
+| 删除指定位置 | `lst.pop(0)` | `lst.splice(0, 1)` | Python pop 返回被删元素 |
+| 删除指定值 | `lst.remove(x)` | `lst.splice(lst.indexOf(x), 1)` | Python 按值删 |
+| 清空 | `lst.clear()` | `lst.length = 0` | |
+
+## 查找
+
+| 操作 | Python | JavaScript | 说明 |
+|------|--------|------------|------|
+| 查索引 | `lst.index(x)` | `lst.indexOf(x)` | |
+| 判断存在 | `x in lst` | `lst.includes(x)` | |
+| 计数 | `lst.count(x)` | `lst.filter(v => v === x).length` | |
+
+## 遍历
+
+| 操作 | Python | JavaScript | 说明 |
+|------|--------|------------|------|
+| 直接遍历 | `for x in lst:` | `for (const x of lst)` | |
+| 带索引遍历 | `for i, x in enumerate(lst):` | `lst.forEach((x, i) => {})` | |
+| 索引范围 | `for i in range(5):` | `for (let i = 0; i < 5; i++)` | |
+
+## 变换
+
+| 操作 | Python | JavaScript | 说明 |
+|------|--------|------------|------|
+| 映射 | `list(map(fn, lst))` | `lst.map(fn)` | |
+| 过滤 | `list(filter(fn, lst))` | `lst.filter(fn)` | |
+| 排序 | `lst.sort()` | `lst.sort()` | |
+| 反转 | `lst.reverse()` | `lst.reverse()` | |
+| 切片 | `lst[1:3]` | `lst.slice(1, 3)` | |
+| 拼接 | `lst1 + lst2` | `lst1.concat(lst2)` | |
+| 展开 | `[*lst1, *lst2]` | `[...lst1, ...lst2]` | |
+
+## 常用小技巧
+
+```python
+# 列表推导式（类似 JS 的 map + filter 合体）
+[x * 2 for x in range(10) if x % 2 == 0]
+# 等价 JS: [0,1,2,3,4,5,6,7,8,9].filter(x => x % 2 === 0).map(x => x * 2)
+
+# 解构
+a, b = [1, 2]        # a=1, b=2
+first, *rest = [1,2,3]  # first=1, rest=[2,3]
+
+# 同时拿到索引和值
+for i, x in enumerate(['a', 'b', 'c']):
+    print(i, x)  # 0 a / 1 b / 2 c
+```
+
+---
+
+## SQLAlchemy Column 常用参数
+
+`Column` 用来定义数据库表的字段。
+
+```python
+Column(类型, primary_key=True, index=True, nullable=False, unique=True, default=xxx)
+```
+
+| 参数 | 说明 | 示例 |
+|--|--|--|
+| `类型` | 字段类型 | `Integer`, `String`, `Boolean`, `DateTime`, `Float`, `Text` |
+| `primary_key` | 是否为主键 | `Column(Integer, primary_key=True)` |
+| `index` | 是否创建索引（加快查询速度） | `Column(String, index=True)` |
+| `nullable` | 是否允许为空（默认允许） | `Column(String, nullable=False)` |
+| `unique` | 是否唯一（如用户名不重复） | `Column(String, unique=True)` |
+| `default` | 默认值 | `Column(DateTime, default=datetime.utcnow)` |
+| `server_default` | 数据库层面的默认值 | `Column(Integer, server_default=text("0"))` |
+| `autoincrement` | 是否自增（主键默认开启） | `Column(Integer, autoincrement=True)` |
+
+### 常用字段类型
+
+| 类型 | 对应数据库 | 说明 |
+|--|--|--|
+| `Integer` | INT | 整数 |
+| `String(长度)` | VARCHAR | 字符串，PostgreSQL 会自动转成 VARCHAR |
+| `Text` | TEXT | 长文本，不限长度 |
+| `Boolean` | BOOLEAN | 布尔值 |
+| `DateTime` | TIMESTAMP | 日期时间 |
+| `Float` | FLOAT | 浮点数 |
+| `LargeBinary` | BLOB | 二进制数据（如图片、文件） |
+
+### 示例：定义一个用户表
+
+```python
+from sqlalchemy import Column, Integer, String, Boolean, DateTime
+from datetime import datetime
+from database import Base
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True)           # 主键，自增
+    username = Column(String, unique=True, nullable=False)       # 唯一，不能为空
+    email = Column(String, unique=True, index=True)              # 唯一，有索引
+    hashed_password = Column(String, nullable=False)             # 密码，不能为空
+    is_active = Column(Boolean, default=True)                    # 默认启用
+    created_at = Column(DateTime, default=datetime.utcnow)       # 创建时间

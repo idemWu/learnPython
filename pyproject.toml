@@ -1,0 +1,15 @@
+[project]
+name = "blogs-api-system"
+version = "0.1.0"
+description = "博客 API 后端系统"
+requires-python = ">=3.14"
+
+dependencies = [
+    "fastapi>=0.136.0",
+    "uvicorn>=0.46.0",
+    "sqlalchemy>=2.0",
+    "psycopg2-binary>=2.9",
+    "python-dotenv (>=1.2.2,<2.0.0)",
+    "python-jose[cryptography] (>=3.5.0,<4.0.0)",
+    "passlib[bcrypt] (>=1.7.4,<2.0.0)",
+]
