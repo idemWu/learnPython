@@ -5,14 +5,15 @@ FastAPI 后端接口文件
 import uvicorn
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, Depends, HTTPException , OAuth2PasswordBearer
+from fastapi import FastAPI, Depends, HTTPException
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from pydantic import BaseModel, ConfigDict
 
 from models import User, Post
 from database import SessionLocal
 
 from passlib.context import CryptContext
-from jose import jwt
+from jose import jwt, JWTError
 
 
 # ========== JWT 配置 ==========
@@ -22,6 +23,7 @@ ACCESS_TOKEN_EXPIRE_MINUTES = 30  # token 有效期（分钟）
 
 # 密码加密上下文（bcrypt 算法）
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
 
 
 def hash_password(password: str):
@@ -83,7 +85,6 @@ class PostCreate(BaseModel):
     """创建文章请求体（前端传什么）"""
     title: str
     content: str
-    author: str = None
 
 
 class PostResponse(BaseModel):
@@ -92,7 +93,8 @@ class PostResponse(BaseModel):
     id: int
     title: str
     content: str
-    author: str
+    author: str | None = None  # 历史数据可能为空，避免校验失败导致 500
+    user_id: int | None = None
 
 
 # ========== FastAPI 应用 ==========
@@ -111,6 +113,17 @@ def get_db():
     finally:
         db.close()
 
+
+def post_owned_by(post: Post, user: User) -> bool:
+    """文章是否属于当前用户：以 user_id 为准；兼容表里 user_id 填错但 author 仍是对的旧数据"""
+    pu, uid = post.user_id, user.id
+    if pu is not None and uid is not None and int(pu) == int(uid):
+        return True
+    pa = (post.author or "").strip()
+    un = (user.username or "").strip()
+    return bool(pa and un and pa == un)
+
+
 def get_current_user(token: str = Depends(oauth2_scheme) , db=Depends(get_db)):
     #1. 先准备一个统一的 401 异常
     credentials_exception = HTTPException(
@@ -121,7 +134,7 @@ def get_current_user(token: str = Depends(oauth2_scheme) , db=Depends(get_db)):
 
     #2.解码token ， 取出用户名
     try:
-        payload = jwt.decode(token , SECRET_KEY , algorithm=[ALGORITHM])
+        payload = jwt.decode(token , SECRET_KEY , algorithms=[ALGORITHM])
         username = payload.get('sub')
         if username  is None:
             raise credentials_exception
@@ -162,8 +175,8 @@ def search_user(user_id: int, db=Depends(get_db)):
     return user
 
 
-@app.post("/users", response_model=UserResponse)
-def create_user(user: UserCreate, db=Depends(get_db)):
+# @app.post("/users", response_model=UserResponse)
+# def create_user(user: UserCreate, db=Depends(get_db)):
     """创建新用户（老接口，保留兼容）"""
     new_user = User(name=user.name, age=user.age)
     db.add(new_user)
@@ -197,15 +210,15 @@ def register(user: UserRegister, db=Depends(get_db)):
 
 
 @app.post("/login", response_model=TokenResponse)
-def login(user: UserLogin, db=Depends(get_db)):
-    """登录：验证密码，返回 JWT token（类似前端拿到 token 存 localStorage）"""
+def login(form_data: OAuth2PasswordRequestForm = Depends(), db=Depends(get_db)):
+    """登录：OAuth2 Password Flow（Swagger Authorize 可直接使用）"""
     # 1. 查找用户
-    db_user = db.query(User).filter(User.username == user.username).first()
+    db_user = db.query(User).filter(User.username == form_data.username).first()
     if not db_user:
         raise HTTPException(status_code=401, detail="用户不存在")
 
     # 2. 验证密码
-    if not verify_password(user.password, db_user.hashed_password):
+    if not verify_password(form_data.password, db_user.hashed_password):
         raise HTTPException(status_code=401, detail="密码错误")
 
     # 3. 生成 JWT token（sub 是 JWT 标准字段，放用户标识）
@@ -219,16 +232,17 @@ def login(user: UserLogin, db=Depends(get_db)):
 
 # ===================== POST 文章CRUD ======================
 @app.post("/posts" , response_model=PostResponse)
-def create_post(post:PostCreate , db=Depends(get_db)):
-    new_post = Post(**post.model_dump()) #1.创建 Post 对象
+def create_post(post:PostCreate , db=Depends(get_db) , current_user=Depends(get_current_user)):
+    # new_post = Post(**post.model_dump()) #1.创建 Post 对象
+    new_post = Post(title=post.title, content=post.content, author=current_user.username, user_id=current_user.id)
     db.add(new_post)       #2.加入会话
     db.commit()            #3.提交到数据库
     db.refresh(new_post)   #4.拿到数据库生成的 id 
     return new_post        #5.返回给前端 
 
-@app.get("/allPosts")
+@app.get("/allPosts", response_model=list[PostResponse])
 def get_allPosts(db=Depends(get_db)):
-    """""获取所有文章列表"""
+    """获取所有文章列表（用 response_model 把 ORM 转成可序列化 JSON）"""
     return db.query(Post).all()
 
 @app.get("/posts/{post_id}", response_model=PostResponse)
@@ -240,26 +254,50 @@ def get_onePost(post_id: int, db=Depends(get_db)):
     return post
 
 @app.put("/posts/{post_id}")
-def putPost(post_id: int, post_data: PostCreate, db=Depends(get_db)):
+def putPost(post_id: int, post_data: PostCreate, db=Depends(get_db) , current_user=Depends(get_current_user)):
     """更新文章"""
+    # 1. 先查出文章
     post = db.query(Post).filter(Post.id == post_id).first()
     if not post:
         raise HTTPException(status_code=404, detail="文章不存在")
 
+    # 2.权限校验 只能更新自己的文章
+    if not post_owned_by(post, current_user):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"无权限更新：post.user_id={post.user_id}, current_user.id={current_user.id}, "
+                f"post.author={post.author!r}, token用户名={current_user.username!r}"
+            ),
+        )
+
+    # 3. 更新文章（作者始终以登录用户为准，防止前端伪造 author）
     post.title = post_data.title
     post.content = post_data.content
-    post.author = post_data.author
+    post.author = current_user.username
 
     db.commit()
     db.refresh(post)
     return post
 
 @app.delete("/posts/{post_id}")
-def deletePost(post_id: int, db=Depends(get_db)):
+def deletePost(post_id: int, db=Depends(get_db) ,current_user=Depends(get_current_user)):
     """删除文章"""
     post = db.query(Post).filter(Post.id == post_id).first()
     if not post:
         raise HTTPException(status_code=404, detail="文章不存在")
+
+    # 2.权限校验 只能删除自己的文章
+    if not post_owned_by(post, current_user):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"无权限删除：post.user_id={post.user_id}, current_user.id={current_user.id}, "
+                f"post.author={post.author!r}, token用户名={current_user.username!r}"
+            ),
+        )
+
+    # 3. 删除文章
     db.delete(post)
     db.commit()
     return {"message": "文章删除成功"}

@@ -599,3 +599,123 @@ app = FastAPI()
 ```
 
 不要把所有东西混在一起，路由函数夹在工具函数中间很难读。
+
+### Day 4 异常处理理解：`raise HTTPException(...)` 是什么
+
+今天写权限逻辑时遇到一个问题：`raise HTTPException(status_code=..., detail=...)` 到底是什么意思？
+
+我的理解：
+
+- `raise`：抛出异常，立刻中断当前函数执行
+- `HTTPException`：FastAPI 的标准 HTTP 错误响应对象
+- `status_code`：返回给前端的状态码（例如 401/403/404）
+- `detail`：返回给前端的错误信息
+
+示例：
+
+```python
+if not post:
+    raise HTTPException(status_code=404, detail="文章不存在")
+```
+
+这段代码的含义是：当文章不存在时，接口直接返回失败响应，不再继续往下执行。
+
+顺便记录常用状态码：
+
+- `400`：请求参数有问题
+- `401`：未登录或 token 无效
+- `403`：已登录但没有权限
+- `404`：资源不存在
+
+### Day 4 鉴权依赖理解：`oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")`
+
+今天搞懂了这行代码的作用：
+
+```python
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")
+```
+
+它的意思是：告诉 FastAPI 我们使用 Bearer Token 鉴权，token 从登录接口 `/login` 获取。
+
+拆开理解：
+
+- `OAuth2PasswordBearer(...)`：FastAPI 提供的鉴权工具，会从请求头里提取 `Authorization: Bearer <token>` 中的 token
+- `tokenUrl="/login"`：主要给 Swagger 文档用，告诉文档去哪个接口拿 token
+
+在依赖函数里这样使用：
+
+```python
+def get_current_user(token: str = Depends(oauth2_scheme), db=Depends(get_db)):
+    ...
+```
+
+这表示：
+
+- 先执行 `oauth2_scheme` 提取 token
+- 把 token 传给 `get_current_user`
+- 如果请求没带 token，FastAPI 会自动返回 `401`
+
+---
+
+### 阶段小结：博客 API 接口跑通（2026-05-09）
+
+当前已打通：
+
+- 注册 / 登录（OAuth2 Password + JWT）、受保护路由依赖 `get_current_user`
+- 文章 CRUD：`POST/GET/PUT/DELETE`，所有权用 `post_owned_by` 判断
+- 数据库：`posts` 补 `user_id` 后与模型一致；`/allPosts` 使用 `response_model` 避免 ORM 序列化 500
+
+踩坑备忘：`create_all` 不会给已有表自动加列，改模型后要手动迁移或用 Alembic。
+
+---
+
+### `post_owned_by(post, user)` 函数逐行「翻译」（语法对照）
+
+作用：**判断这篇文章算不算当前登录用户自己的**，用于更新 / 删除前的权限校验。
+
+```python
+def post_owned_by(post: Post, user: User) -> bool:
+```
+
+- 函数名 `post_owned_by`，返回布尔值 `True/False`。
+- `post`：一篇文章；`user`：当前登录用户（类型标注 `Post`、`User` 便于阅读和 IDE 提示）。
+
+```python
+pu, uid = post.user_id, user.id
+```
+
+- **多重赋值**：`pu` = 文章的 `user_id`，`uid` = 当前用户的 `id`。
+
+```python
+if pu is not None and uid is not None and int(pu) == int(uid):
+    return True
+```
+
+- `is not None`：不是「空 / 缺失」。
+- `and`：三个条件都成立才进分支。
+- `int(pu) == int(uid)`：统一按整数比较，避免类型不一致误判；相等则认定「作者 id 一致」，返回 `True`。
+
+```python
+pa = (post.author or "").strip()
+un = (user.username or "").strip()
+return bool(pa and un and pa == un)
+```
+
+- `x or ""`：`author`/`username` 为空时用空字符串，避免后面报错。
+- `.strip()`：去掉首尾空格。
+- `pa and un and pa == un`：两边都有内容且字符串完全相同 → 是自己的（兼容迁移期 `user_id` 填错但 `author` 仍正确的旧数据）。
+- `bool(...)`：明确转成 `True`/`False`。
+
+逻辑口头版：**先看 `user_id` 是否等于当前用户 `id`；对不上再用 `author` 与 `username` 兜底。**
+
+---
+
+### 下一步学习建议（按顺序）
+
+1. **数据库迁移**：入门 Alembic，改模型不再手写 `ALTER TABLE`
+2. **路由拆分**：`APIRouter` 把用户 / 文章拆开，`main.py` 只做挂载
+3. **返回与校验统一**：请求/响应模型分文件（`schemas/`），敏感字段永不返回
+4. **错误与日志**：统一异常格式、记录请求 id，便于线上排查
+5. **部署**：`uvicorn` + 环境变量、`reload=False`、必要时 Docker
+
+下一阶段可从「Alembic 第一条迁移」或「抽出 posts 的 APIRouter」任选其一动手。

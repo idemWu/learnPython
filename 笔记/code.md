@@ -113,3 +113,102 @@ class User(Base):
     hashed_password = Column(String, nullable=False)             # 密码，不能为空
     is_active = Column(Boolean, default=True)                    # 默认启用
     created_at = Column(DateTime, default=datetime.utcnow)       # 创建时间
+```
+
+---
+
+## 虚拟环境（Windows / PowerShell）
+
+激活（提示符前会出现 `(.venv)`）：
+
+```powershell
+cd F:\pythonCode\blogsAPISystem
+.\.venv\Scripts\Activate.ps1
+```
+
+若提示无法运行脚本：
+
+```powershell
+Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope CurrentUser
+```
+
+**觉得激活麻烦时**：不激活也可以，直接用 venv 里的解释器，路径清晰、不易混用全局 Python：
+
+```powershell
+.\.venv\Scripts\python.exe main.py
+.\.venv\Scripts\python.exe -m pip install 包名
+```
+
+Cursor / VS Code：选好解释器为 `.venv\Scripts\python.exe`，终端常会自带虚拟环境。
+
+---
+
+## FastAPI：JWT + `OAuth2PasswordBearer`
+
+`oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/login")` 的含义：
+
+- 告诉 FastAPI：**受保护接口从请求头读取** `Authorization: Bearer <token>`
+- `tokenUrl` 主要给 **Swagger / OpenAPI 文档**用，标明 token 从哪个登录地址换取
+
+`get_current_user` 里 `token: str = Depends(oauth2_scheme)`：请求进来时先取 token，再解码、查库。
+
+使用 **表单登录**（`OAuth2PasswordRequestForm`）时，需要安装 **`python-multipart`**，否则会报错：`Form data requires "python-multipart"`。
+
+---
+
+## OAuth2 Password Flow vs HTTP Bearer（文档体验）
+
+| 方案 | 运行时本质 | Swagger `Authorize` 常见样子 |
+|------|------------|------------------------------|
+| **OAuth2 Password** | 仍是 `Bearer <token>` | 用户名 / 密码表单（或配合 token URL） |
+| **HTTP Bearer** | 只认 Bearer 头 | Often 单一 token 输入框 |
+
+JWT 校验逻辑可以相同；差别多在「文档里怎么登录、怎么填 token」。
+
+访问受保护接口时，请求头必须是：
+
+`Authorization: Bearer <access_token>`（注意 **`Bearer` 后面有空格**）。
+
+---
+
+## `raise HTTPException(status_code, detail)`
+
+- `raise`：立刻结束当前处理函数
+- `HTTPException`：FastAPI 按给定状态码返回 JSON 错误
+- 常用：`400` 参数/业务错误，`401` 未登录或 token 无效，`403` 无权限，`404` 资源不存在
+
+---
+
+## 鉴权写在路由上还是「全局」？
+
+- **不是所有接口都要登录**（如 `/`、`/register`、`/login`），一般不挂在整个 `app` 上。
+- **按路由注入** `Depends(get_current_user)`：一眼能看出哪个接口要登录。
+- 进阶：用 `APIRouter(..., dependencies=[Depends(get_current_user)])` 给一组路由统一加鉴权。
+
+---
+
+## 本地调试：`/docs` 转圈、`curl` 超时
+
+常见原因：
+
+1. **多个 uvicorn / 多次 `python main.py`**，端口 `8000` 上不止一个监听进程，或大量 `CLOSE_WAIT` → 连接卡住。
+2. **数据库连不上**（如 Postgres 未启动、`DATABASE_URL` 错误），部分请求会一直等。
+
+处理思路：
+
+1. 停掉所有服务，`netstat -ano | findstr ":8000"`，对多余 PID `taskkill /PID xxx /F`。
+2. **只在一个终端**启动：`.\.venv\Scripts\python.exe main.py`。
+3. 自检：`curl.exe -m 5 http://127.0.0.1:8000/` 应很快返回 `{"msg":"hello world"}`。
+
+怀疑 reload 捣乱时，可暂时把 `reload=False` 跑稳后再开。
+
+---
+
+## `post_owned_by`（文章归属判断）
+
+用于 **PUT/DELETE 文章** 前判断「是不是本人」：
+
+1. **`post.user_id` 与 `user.id`** 转成 `int` 后相等 → 有权。
+2. 否则再看 **`post.author` 与 `user.username`**（`strip()` 后）是否相等 → 兼容旧数据里 `user_id` 曾填错的情况。
+
+详细逐行解释见 **`笔记/python学习日记.md`** 里「`post_owned_by` 函数逐行翻译」一节。
